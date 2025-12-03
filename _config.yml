@@ -1,0 +1,11 @@
+# 1. Site Settings
+title: Gouge's Blogs
+email: ginolee22@outlook.com
+description: This is my personal blog, testing
+baseurl: "" # Keep this empty if your site is at the root of the domain
+url: "https://gino-gouge.github.io"
+
+# 2. Build Settings
+theme: jekyll-theme-minimal # Use a standard, supported GitHub Pages theme
+plugins:
+  - jekyll-feed
