@@ -1,0 +1,177 @@
+---
+layout: post
+title: "My 2nd Blog Post"
+author: Jane Doe
+date: 2025-12-04 22:00:00 -0800
+categories: [tech, tutorial]
+---
+
+# Lab3B - Log Replication
+Following the previous blog [Leader Election](link), Log Replication is covered in this blog. Once a leader has been elected, it begins servicing client requests. Each request contains a command to be executed by the replicated state machine.
+
+## Log Replication Algorithm
+1. Leader appends the command to its log and issues AppendEntries RPCs in parallel to all followers to replicate the entry. Leader will keep sending RPCs until all the followers catch up even though it replies to client after majority replication. Example of logs are show below
+
+![alt text](/assets/images/logs_examples.png)
+
+2. Leader keeps track of the highest index it knows to be committed by making sure the entry has replicated on majority of the servers. This index is communicated to followers so that followers can find out.
+   * Leader also keeps appliedAt index to track the highest index it has applied to the state machine. The main reason to separate appliedAt and commit index is to avoid time consuming IO.
+3. Leader employs Consistency Check protocol to ensure the log is consistent across all followers. Whenever an inconsistent log entry detected, leader will force the follower's logs to dulicate its own.
+4. Safety: Safety put additional restrictions to guarantee the leader for any term contains all commited logs
+   * Election Restriction: A candidate's log must at least up-to-date when it can be elected. Up-to-date is determined by comparing index and term of the last enty. If with different terms, the log with later term is up-to-date. If with same term, the longer is more up-to-date.
+   * [QQ]Only commit entries in current term. Leader can't assume commit index is the last log index b\c it may be different across followers. Leader need to send append entries RPC to followers to force consistent logs before committing index.
+     * * Note: By current implementation, the commit index won't preceed if no client request despite of the periodic heartbeat. To amortize the performance, a noop entry is added to logs as soon as the leader is elected.
+
+
+## Implementation
+### 1. AppendEntries RPC
+Upon receiving a request, leader will append the entry to its own log.
+```
+// sender
+entry = Entry(term, command)
+logs.append(entry)
+
+for follower in followers {
+    /** AppendEntries RPC Section **/
+    for state == leader {
+        nextIndex = nextIndex[followerId]
+        request = AppendEntriesRequest(term, logs[nextIndex, len(logs) - 1])
+        ok = sendAppendEntriesRPC(request, reply)
+        if append_entry_succeed {
+            break
+        }
+        if higher_term_discovered {
+            update_term
+            step_down_to_follower
+            break
+        }
+        // if RPC is lost or timeout, keep trying until succeed
+        keep_trying_until_succeed
+    }
+}
+
+// receiver
+if args.term < currentTerm {
+    reply.success = false
+    reply.term = currentTerm
+    return
+}
+if found_conflicts {
+    reply.success = false
+    reply.term = currentTerm
+    reply.conflictIndex = args.prevLogIndex
+    return
+}
+if leader's term is equal or higher {
+    append the log
+    return
+}
+```
+
+### 2. Commit Index
+There are two main approaches to implement commit index
+* Sync (blocking): Leader waits for majority of the followers to catch-up before committing the entry. (need to make sure the logs is atomic)
+* Async (non-blocking): Leader asynchrously append the entry to followers and keep track the index replicated for every follower. After every update, it checks whether this index appears on majority of the followers and update the commit index. In this approach, leader needs an array, matchIndex[], to keep track of the index replicated on each follower.
+```
+// sync
+for follower in followers {
+    /** AppendEntries RPC Section **/
+    ...
+}
+for wait_for_majority_catch_up {
+    commitIndex = len(logs) - 1
+}
+
+
+// async
+for follower in followers {
+    /** AppendEntries RPC Section **/
+    ...
+    matchIndex[followerId] = leaderLastIndex
+
+    /** Update matchIndex Section **/
+    for i = [leaderLastIndex, 0] {
+        cnt = 0
+        for all followers {
+            if matchIndex[follower] > i {
+                cnt += 1
+            }
+        }
+        if cnt > N/2 {
+            commitIndex = i
+            break
+        }
+    }
+}
+```
+
+### 3. Consistency Check
+1. AppendEntries RPCs will include the index and term of immediate preceding entry in leader's log. If followers' log doesn't match (either doesn't have the index or the term), the follower will refuse the entry and the leader will decrements the entry and keep trying until matches.
+2. Optimization: Above mentioned consistency check protocol is per entry. To reduce the number of RPCs, the protocol can be optimized to be per term. Concretely, when a follower discovers a mis-matching, it sends back the index of the first entry of that term so that leader can compare the entry of previous term
+```
+// consistency check per entry
+for follower in followers {
+    /** AppendEntries RPC Section **/
+    for state == leader {
+        ...
+        request = AppendEntriesRequest(term, logs[nextIndex, len(logs) - 1], prevLogIndex, prevLogTerm)
+        ...
+        /** Consistency Check Section **/
+        if found_conflicts {
+            nextIndex[followerId] = reply.conflictIndex
+        }
+    }
+}
+
+// follower optimization
+if found_conflicts {
+    reply.success = false
+    reply.term = currentTerm
+    for i = [prevLogIndex - 1, 0] {
+        if logs[i].term != log[prevLogIndex].term {
+            reply.conflictIndex = i
+            break
+        }
+    }
+    return
+}
+```
+
+### 4. Safety
+```
+// 1. Election Restriction
+func isCandidateUpToDate(RequestVoteRequest args) {
+    if args.lastLogTerm < logs[-1].Term {
+        reply.voteGranted = false
+        return
+    }
+
+    if args.lastLogTerm > logs[-1].Term {
+        reply.voteGranted = false
+        return
+    }
+
+    if args.lastLogTerm == logs[-1].Index {
+        reply.voteGranted = args.lastLogIndex >= len(logs) - 1
+        return
+    }
+}
+
+// 2. Only commit entries in current term
+    ...
+    /** Update matchIndex Section **/
+    for i = [leaderLastIndex, 0] {
+        ...
+        if cnt > N/2 && logs[i].term == currentTerm {
+            commitIndex = i
+            break
+        }
+    }
+    ...
+
+// Append a noop at current term to logs as soon as the leader is elected
+...
+state = leader
+logs.append(Entry(currentTerm, 'noop'))
+...
+```
