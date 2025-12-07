@@ -1,12 +1,11 @@
 ---
 layout: post
-title: "My 2nd Blog Post"
-author: Jane Doe
+title: "Lab3B: Raft Log Replication"
 date: 2025-12-04 22:00:00 -0800
 categories: [tech, tutorial]
+permalink: /raft/lab3B/
 ---
 
-# Lab3B - Log Replication
 Following the previous blog [Leader Election](link), Log Replication is covered in this blog. Once a leader has been elected, it begins servicing client requests. Each request contains a command to be executed by the replicated state machine.
 
 ## Log Replication Algorithm
