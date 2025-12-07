@@ -1,0 +1,66 @@
+---
+layout: default
+---
+
+<article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+    <header class="post-header">
+        <h1 class="post-title p-name" itemprop="name headline">{{ page.title | escape }}</h1>
+        <p class="post-meta">
+            <time class="dt-published" datetime="{{ page.date | date_to_xmlschema }}" itemprop="datePublished">
+                {%- assign date_format = site.minima.date_format | default: "%b %-d, %Y" -%}
+                {{ page.date | date: date_format }}
+            </time>
+            {%- if page.author -%}
+            • <span itemprop="author" itemscope itemtype="http://schema.org/Person"><span class="p-author h-card"
+                    itemprop="name">{{ page.author }}</span></span>
+            {%- endif -%}
+        </p>
+    </header>
+
+    {%- assign h2_parts = content | split: '<h2' -%} {%- assign toc_items='' -%} {%- if h2_parts.size> 1 -%}
+        {%- for part in h2_parts offset:1 -%}
+        {%- assign id = part | split: 'id="' | last | split: '"' | first -%}
+        {%- assign title = part | split: '</h2>' | first | split: '>' | last -%}
+        {%- assign toc_items = toc_items | append: '<li><a href="#' | append: id | append: '">' | append: title |
+                append: '</a>' -%}
+
+            {%- assign after_h2 = part | split: '</h2>' | last -%}
+            {%- assign h3_parts = after_h2 | split: '<h3' -%} {%- if h3_parts.size> 1 -%}
+                {%- assign sub = '' -%}
+                {%- for h3 in h3_parts offset:1 -%}
+                {%- assign h3_id = h3 | split: 'id="' | last | split: '"' | first -%}
+                {%- assign h3_title = h3 | split: '</h3>' | first | split: '>' | last -%}
+                {%- assign sub = sub | append: '
+        <li class="toc-sub"><a href="#' | append: h3_id | append: '">' | append: h3_title | append: '</a></li>' -%}
+        {%- endfor -%}
+        {%- assign toc_items = toc_items | append: '<ul class="toc-sublist">' | append: sub | append: '</ul>' -%}
+        {%- endif -%}
+        {%- assign toc_items = toc_items | append: '</li>' -%}
+        {%- endfor -%}
+        {%- endif -%}
+
+        {% comment %}
+        The TOC Container HTML using the fixed-position class.
+        {% endcomment %}
+
+        {% if toc_items != '' %}
+        <aside class="fixed-toc-container" aria-label="Table of contents">
+            <nav>
+                <strong>Table of Content</strong>
+                <ul id="toc" class="toc-list">{{ toc_items }}</ul>
+            </nav>
+        </aside>
+        {% endif %}
+
+        <div class="post-content e-content" itemprop="articleBody">
+            {{ content }}
+        </div>
+        </div>
+
+        {%- if site.disqus.shortname -%}
+        {%- include disqus_comments.html -%}
+        {%- endif -%}
+
+        <a class="u-url" href="{{ page.url | relative_url }}" hidden></a>
+</article>

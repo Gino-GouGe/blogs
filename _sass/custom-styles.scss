@@ -1,0 +1,52 @@
+/* --- 1. The FIXED TOC Container (The Floating Element) --- */
+.fixed-toc-container {
+    position: fixed !important;
+    top: 60px;
+    margin-left: calc(-300px - 40px);
+    width: 300px;
+    padding: 15px;
+}
+
+.wrapper {
+    max-width: $content-width;
+    margin: 0 auto !important;
+}
+
+.fixed-toc-container nav strong {
+    display: block;
+    font-size: 1.1em;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: $brand-color;
+}
+
+.fixed-toc-container .toc-list {
+    list-style-type: none;
+    padding-left: 0;
+    margin: 0;
+}
+
+.fixed-toc-container .toc-list li {
+    margin-bottom: 5px;
+}
+
+.fixed-toc-container .toc-sublist {
+    list-style-type: none;
+    padding-left: 15px;
+    margin-top: 5px;
+}
+
+@media screen and (max-width: 900px) {
+    .fixed-toc-container {
+        position: static !important;
+        width: 100%;
+        top: auto;
+        left: auto;
+        z-index: 1;
+    }
+
+    .wrapper {
+        margin-left: auto !important;
+        padding-left: $spacing-unit !important;
+    }
+}
