@@ -11,7 +11,7 @@ Following the previous blog [Leader Election](link), Log Replication is covered 
 ## Log Replication Algorithm
 1. Leader appends the command to its log and issues AppendEntries RPCs in parallel to all followers to replicate the entry. Leader will keep sending RPCs until all the followers catch up even though it replies to client after majority replication. Example of logs are show below
 
-![alt text](/assets/images/logs_examples.png)
+<img src="{{ site.baseurl }}/assets/images/logs_examples.png" alt="Log Replication">
 
 2. Leader keeps track of the highest index it knows to be committed by making sure the entry has replicated on majority of the servers. This index is communicated to followers so that followers can find out.
    * Leader also keeps appliedAt index to track the highest index it has applied to the state machine. The main reason to separate appliedAt and commit index is to avoid time consuming IO.
@@ -107,6 +107,7 @@ for follower in followers {
 ### 3. Consistency Check
 1. AppendEntries RPCs will include the index and term of immediate preceding entry in leader's log. If followers' log doesn't match (either doesn't have the index or the term), the follower will refuse the entry and the leader will decrements the entry and keep trying until matches.
 2. Optimization: Above mentioned consistency check protocol is per entry. To reduce the number of RPCs, the protocol can be optimized to be per term. Concretely, when a follower discovers a mis-matching, it sends back the index of the first entry of that term so that leader can compare the entry of previous term
+
 ```
 // consistency check per entry
 for follower in followers {
