@@ -44,7 +44,7 @@ jobs:
                 hugo \
                   --minify \
                   --gc \
-                  --baseURL "https://Gino-GouGe.github.io/blogs-hugo/"
+                  --baseURL "https://Gino-GouGe.github.io/blogs/"
 
 
             - name: Deploy 🚀
