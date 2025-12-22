@@ -2,15 +2,15 @@
 mainSections = ["post"]
 # Output page's full content in RSS.
 rssFullContent = true
-favicon = "/favicon.png"
+favicon = "/favicon.svg"
 
 [footer]
 since = 2020
 customText = ""
 
 [dateFormat]
-published = "Jan 02, 2006"
-lastUpdated = "Jan 02, 2006 15:04 MST"
+published = "Dec 22, 2025"
+lastUpdated = "Dec 22, 2025 11:34 PST"
 
 [sidebar]
 emoji = "🍥"
@@ -33,6 +33,9 @@ default = "Licensed under CC BY-NC-SA 4.0"
 ## Widgets
 [[widgets.homepage]]
 type = "search"
+
+[[widgets.homepage]]
+type = "about"
 
 [[widgets.homepage]]
 type = "archives"
