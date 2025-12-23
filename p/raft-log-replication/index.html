@@ -1,0 +1,337 @@
+<!doctype html><html lang=en-us dir=ltr><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><meta name=description content="Following the previous blog Leader Election, Log Replication is covered today. Once a leader has been elected, it begins servicing client requests. Each request contains a command to be executed by the replicated state machine.\nLog Replication Leader appends the command to its log and issues AppendEntries RPCs in parallel to all followers to replicate the entry. Leader will keep sending RPCs until all the followers catch up even though it replies to client after majority replication (e.g. 3/5). Example of logs are shown above Leader keeps track of the highest index it knows to be committed by making sure the entry has replicated on majority of the servers. This index is communicated to followers so that followers can find out. Server (both leader and follower) also have a state appliedAt index to track the highest index it has applied to the state machine. Upon discovering commit index is larger than appliedAt, a dedicated thread will start to apply the entry to state machine. Leader employs Consistency Check protocol to ensure the log is consistent across all servers. Whenever an inconsistent log entry detected, leader will force the follower&rsquo;s logs to duplicate its own. Note: The main reason to separate appliedAt and commit index is to avoid waiting for time-consuming IO.\n"><title>Raft Log Replication</title><link rel=canonical href=https://Gino-GouGe.github.io/blogs/p/raft-log-replication/><link rel=stylesheet href=/blogs/scss/style.min.833d6eed45de56f48306bf57268d5b8cdfc8a60e8e7bdc99810464fcd033f7c6.css><meta property='og:title' content="Raft Log Replication"><meta property='og:description' content="Following the previous blog Leader Election, Log Replication is covered today. Once a leader has been elected, it begins servicing client requests. Each request contains a command to be executed by the replicated state machine.\nLog Replication Leader appends the command to its log and issues AppendEntries RPCs in parallel to all followers to replicate the entry. Leader will keep sending RPCs until all the followers catch up even though it replies to client after majority replication (e.g. 3/5). Example of logs are shown above Leader keeps track of the highest index it knows to be committed by making sure the entry has replicated on majority of the servers. This index is communicated to followers so that followers can find out. Server (both leader and follower) also have a state appliedAt index to track the highest index it has applied to the state machine. Upon discovering commit index is larger than appliedAt, a dedicated thread will start to apply the entry to state machine. Leader employs Consistency Check protocol to ensure the log is consistent across all servers. Whenever an inconsistent log entry detected, leader will force the follower&rsquo;s logs to duplicate its own. Note: The main reason to separate appliedAt and commit index is to avoid waiting for time-consuming IO.\n"><meta property='og:url' content='https://Gino-GouGe.github.io/blogs/p/raft-log-replication/'><meta property='og:site_name' content='GouGe'><meta property='og:type' content='article'><meta property='article:section' content='Post'><meta property='article:published_time' content='2025-12-22T00:00:00+00:00'><meta property='article:modified_time' content='2025-12-22T00:00:00+00:00'><meta name=twitter:title content="Raft Log Replication"><meta name=twitter:description content="Following the previous blog Leader Election, Log Replication is covered today. Once a leader has been elected, it begins servicing client requests. Each request contains a command to be executed by the replicated state machine.\nLog Replication Leader appends the command to its log and issues AppendEntries RPCs in parallel to all followers to replicate the entry. Leader will keep sending RPCs until all the followers catch up even though it replies to client after majority replication (e.g. 3/5). Example of logs are shown above Leader keeps track of the highest index it knows to be committed by making sure the entry has replicated on majority of the servers. This index is communicated to followers so that followers can find out. Server (both leader and follower) also have a state appliedAt index to track the highest index it has applied to the state machine. Upon discovering commit index is larger than appliedAt, a dedicated thread will start to apply the entry to state machine. Leader employs Consistency Check protocol to ensure the log is consistent across all servers. Whenever an inconsistent log entry detected, leader will force the follower&rsquo;s logs to duplicate its own. Note: The main reason to separate appliedAt and commit index is to avoid waiting for time-consuming IO.\n"><link rel="shortcut icon" href=/favicon.svg></head><body class=article-page><script>(function(){const e="StackColorScheme";localStorage.getItem(e)||localStorage.setItem(e,"auto")})()</script><script>(function(){const t="StackColorScheme",e=localStorage.getItem(t),n=window.matchMedia("(prefers-color-scheme: dark)").matches===!0;e=="dark"||e==="auto"&&n?document.documentElement.dataset.scheme="dark":document.documentElement.dataset.scheme="light"})()</script><div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky"><button class="hamburger hamburger--spin" type=button id=toggle-menu aria-label="Toggle Menu">
+<span class=hamburger-box><span class=hamburger-inner></span></span></button><header><figure class=site-avatar><a href=/blogs/><img src=/blogs/img/cute_coding_dog_hu_80330de7fd67d348.png width=300 height=300 class=site-logo loading=lazy alt=Avatar>
+</a><span class=emoji>🍥</span></figure><div class=site-meta><h1 class=site-name><a href=/blogs>GouGe</a></h1><h2 class=site-description>I turn coffee into bugs</h2></div></header><ol class=menu-social><li><a href=https://github.com/Gino-GouGe target=_blank title=GitHub rel=me><svg class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6.0 00-1.3-3.2 4.2 4.2.0 00-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3.0 00-6.2.0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2.0 00-.1 3.2A4.6 4.6.0 004 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg></a></li></ol><ol class=menu id=main-menu><li><a href=/blogs/><svg class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><polyline points="5 12 3 12 12 3 21 12 19 12"/><path d="M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/><path d="M9 21v-6a2 2 0 012-2h2a2 2 0 012 2v6"/></svg>
+<span>Home</span></a></li><li><a href=/blogs/about/><svg class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="7" r="4"/><path d="M6 21v-2a4 4 0 014-4h4a4 4 0 014 4v2"/></svg>
+<span>About</span></a></li><li><a href=/blogs/search/><svg class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="10" cy="10" r="7"/><line x1="21" y1="21" x2="15" y2="15"/></svg>
+<span>Search</span></a></li><li><a href=/blogs/archives/><svg class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><rect x="3" y="4" width="18" height="4" rx="2"/><path d="M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+<span>Archives</span></a></li><li class=menu-bottom-section><ol class=menu><li id=dark-mode-toggle><svg class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="8" cy="12" r="2"/><rect x="2" y="6" width="20" height="12" rx="6"/></svg>
+<svg class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="16" cy="12" r="2"/><rect x="2" y="6" width="20" height="12" rx="6"/></svg>
+<span>Dark Mode</span></li></ol></li></ol></aside><aside class="sidebar right-sidebar sticky"><section class="widget archives"><div class=widget-icon><svg class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/><line x1="11" y1="4" x2="7" y2="20"/><line x1="17" y1="4" x2="13" y2="20"/></svg></div><h2 class="widget-title section-title">Table of contents</h2><div class=widget--toc><nav id=TableOfContents><ol><li><a href=#log-replication>Log Replication</a></li><li><a href=#safety>Safety</a></li><li><a href=#implementation>Implementation</a><ol><li><a href=#appendentries-rpc>AppendEntries RPC</a></li><li><a href=#commitindex>CommitIndex</a></li><li><a href=#appliedat>AppliedAt</a></li><li><a href=#consistency-check>Consistency Check</a></li><li><a href=#safety-1>Safety</a></li></ol></li><li><a href=#ref>Ref</a></li></ol></nav></div></section></aside><main class="main full-width"><article class=main-article><header class=article-header><div class=article-details><header class=article-category><a href=/blogs/categories/distributed-system/>Distributed System
+</a><a href=/blogs/categories/raft/>Raft</a></header><div class=article-title-wrapper><h2 class=article-title><a href=/blogs/p/raft-log-replication/>Raft Log Replication</a></h2></div><footer class=article-time><div><svg class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><path d="M11.795 21H5a2 2 0 01-2-2V7a2 2 0 012-2h12a2 2 0 012 2v4"/><circle cx="18" cy="18" r="4"/><path d="M15 3v4"/><path d="M7 3v4"/><path d="M3 11h16"/><path d="M18 16.496V18l1 1"/></svg>
+<time class=article-time--published datetime=2025-12-22T00:00:00Z>Dec 22, 2025</time></div><div><svg class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+<time class=article-time--reading>7 minute read</time></div></footer></div></header><section class=article-content><p>Following the previous blog <a class=link href=/blogs/p/raft-leader-election/>Leader Election</a>, Log Replication is covered today. Once a leader has been elected, it begins servicing client requests. Each request contains a command to be executed by the replicated state machine.</p><h2 id=log-replication>Log Replication</h2><p><img src=/blogs/p/raft-log-replication/logs_examples.png width=928 height=690 srcset="/blogs/p/raft-log-replication/logs_examples_hu_f4b4621485b68585.png 480w, /blogs/p/raft-log-replication/logs_examples_hu_aea2b7fc2f1b8945.png 1024w" loading=lazy alt="Log Replication" class=gallery-image data-flex-grow=134 data-flex-basis=322px></p><ol><li>Leader appends the command to its log and issues AppendEntries RPCs in parallel to all followers to replicate the entry. Leader will keep sending RPCs until all the followers catch up even though it replies to client after majority replication (e.g. 3/5). Example of logs are shown above</li><li>Leader keeps track of the highest index it knows to be committed by making sure the entry has replicated on majority of the servers. This index is communicated to followers so that followers can find out.</li><li>Server (both leader and follower) also have a state appliedAt index to track the highest index it has applied to the state machine. Upon discovering commit index is larger than appliedAt, a dedicated thread will start to apply the entry to state machine.</li><li>Leader employs Consistency Check protocol to ensure the log is consistent across all servers. Whenever an inconsistent log entry detected, leader will force the follower&rsquo;s logs to duplicate its own.</li></ol><blockquote><p><strong>Note:</strong> The main reason to separate appliedAt and commit index is to avoid waiting for time-consuming IO.</p></blockquote><h2 id=safety>Safety</h2><p>Safety put additional restrictions to guarantee the leader for any term contains all committed logs</p><ol><li>Election Restriction: A candidate&rsquo;s log must at least up-to-date when it can be elected. Up-to-date is determined by comparing index and term of the last entry. If with different terms, the log with later term is up-to-date. If with same term, the longer is more up-to-date</li><li>Append Entries Restriction: In addition to majority rule, leader can only commit entries in current term. In other words, leader <em>CANNOT</em> mark an entry as committed when the entry gets replicated to majority but in previous term (This sounds counter intuitive but Figure 8 in the paper explains the extreme scenario quite well and my explanation can be no match for that. So highly recommend to read the paper)</li></ol><blockquote><p><strong>Note:</strong> You may notice after introducing the Append Entries Restriction, the cluster can only make progress (i.e. increment commitIndex and apply the cmd to state machine) when there are new requests on current term. This is not optimal because the system better makes progress during idle time. One optimization (e.g. implemented by etcd) is to commit a no-op entry at current term immediately upon the election of a new leader so the system can still make progress even no client request</p></blockquote><h2 id=implementation>Implementation</h2><h3 id=appendentries-rpc>AppendEntries RPC</h3><p>Upon receiving a request, leader will append the entry to its own log and issues AppendEntriesRPC. In order to know which entries to send to different followers, leader need to maintain a <code>nextIndex</code> array wrt each follower to track the next index haven&rsquo;t been replicated.</p><blockquote><p><strong>Note:</strong>
+There is a tricky part in follower appends it&rsquo;s log. The rule according to the paper is &ldquo;If an existing entry conflicts with a new one, delete the existing entry and all that follow it (§5.3)&rdquo;.
+In other words, follower should not do anything when no conflicts. My original implementation <code>rf.log = append(rf.log[:prevLogIndex], entries)</code> is not safe b\c of the example</p><ol><li>Leader issues 2 AppendEntriesRPC with entries [2,2], [2,2,3] in chronological order.</li><li>The 2nd RPC gets to follower earlier b\c of unstable network and has follower&rsquo;s log to be [2,2,3], already updated.</li><li>Trim from the <code>prevLogIndex</code> is definitely not safe b\c it removes committed entry. Instead, the follower should scan the log and only delete when conflicts. When no conflict detected, the follower&rsquo;s log should stay</li></ol></blockquote><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span><span class=lnt>36
+</span><span class=lnt>37
+</span><span class=lnt>38
+</span><span class=lnt>39
+</span><span class=lnt>40
+</span><span class=lnt>41
+</span><span class=lnt>42
+</span><span class=lnt>43
+</span><span class=lnt>44
+</span><span class=lnt>45
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// sender</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=nx>entry</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nf>Entry</span><span class=p>(</span><span class=nx>term</span><span class=p>,</span><span class=w> </span><span class=nx>command</span><span class=p>)</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=nx>logs</span><span class=p>.</span><span class=nb>append</span><span class=p>(</span><span class=nx>entry</span><span class=p>)</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=kd>func</span><span class=w> </span><span class=p>(</span><span class=nx>rf</span><span class=w> </span><span class=o>*</span><span class=nx>Raft</span><span class=p>)</span><span class=w> </span><span class=nf>sendAppendEntries</span><span class=p>()</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>for</span><span class=w> </span><span class=nx>follower</span><span class=w> </span><span class=nx>in</span><span class=w> </span><span class=nx>followers</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=cm>/** AppendEntries RPC Section **/</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>nextIndex</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>nextIndex</span><span class=p>[</span><span class=nx>followerId</span><span class=p>]</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>request</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nf>AppendEntriesRequest</span><span class=p>(</span><span class=nx>term</span><span class=p>,</span><span class=w> </span><span class=nx>logs</span><span class=p>[</span><span class=nx>nextIndex</span><span class=p>,</span><span class=w> </span><span class=nb>len</span><span class=p>(</span><span class=nx>logs</span><span class=p>)</span><span class=w> </span><span class=o>-</span><span class=w> </span><span class=mi>1</span><span class=p>])</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>go</span><span class=w> </span><span class=kd>func</span><span class=p>()</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>ok</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nf>sendAppendEntriesRPC</span><span class=p>(</span><span class=nx>request</span><span class=p>,</span><span class=w> </span><span class=nx>reply</span><span class=p>)</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=k>if</span><span class=w> </span><span class=nx>append_entry_succeed</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=k>if</span><span class=w> </span><span class=nx>discover_higher_term</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=nx>update_term</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=nx>step_down_to_follower</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=k>if</span><span class=w> </span><span class=nx>receive_old_rpc</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=nx>simply_discard</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=c1>// receiver</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=kd>func</span><span class=w> </span><span class=p>(</span><span class=nx>rf</span><span class=w> </span><span class=o>*</span><span class=nx>Raft</span><span class=p>)</span><span class=w> </span><span class=nf>AppendEntries</span><span class=p>(</span><span class=nx>args</span><span class=w> </span><span class=o>*</span><span class=nx>AppendEntriesArgs</span><span class=p>,</span><span class=w> </span><span class=nx>reply</span><span class=w> </span><span class=o>*</span><span class=nx>AppendEntriesReply</span><span class=p>)</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>if</span><span class=w> </span><span class=nx>args</span><span class=p>.</span><span class=nx>term</span><span class=w> </span><span class=p>&lt;</span><span class=w> </span><span class=nx>currentTerm</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>success</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=kc>false</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>term</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>currentTerm</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>if</span><span class=w> </span><span class=nx>found_conflicts</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>success</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=kc>false</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>term</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>currentTerm</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>conflictIndex</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>args</span><span class=p>.</span><span class=nx>prevLogIndex</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=c1>// leader&#39;s term is equal or higher</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=nx>append_the_log</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span></code></pre></td></tr></table></div></div><h3 id=commitindex>CommitIndex</h3><p>To handle high concurrency, leader would just start a thread to append entries to followers without any synchronization among followers. To keep track the index replicated to every follower, leader also maintains a <code>matchIndex</code> array. After every update, it checks whether an index appears on majority of the followers and update the commit index.</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// async</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=k>for</span><span class=w> </span><span class=nx>follower</span><span class=w> </span><span class=nx>in</span><span class=w> </span><span class=nx>followers</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=cm>/** AppendEntries RPC Section **/</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=nx>matchIndex</span><span class=p>[</span><span class=nx>followerId</span><span class=p>]</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>leaderLastIndex</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=cm>/** Update matchIndex Section **/</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>for</span><span class=w> </span><span class=nx>i</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=p>[</span><span class=nx>leaderLastIndex</span><span class=p>,</span><span class=w> </span><span class=mi>0</span><span class=p>)</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>cnt</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=mi>0</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>for</span><span class=w> </span><span class=nx>follower</span><span class=w> </span><span class=nx>in</span><span class=w> </span><span class=nx>followers</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=k>if</span><span class=w> </span><span class=nx>i_replicated_on_follower</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=nx>cnt</span><span class=w> </span><span class=o>+=</span><span class=w> </span><span class=mi>1</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>if</span><span class=w> </span><span class=nx>cnt</span><span class=w> </span><span class=p>&gt;</span><span class=w> </span><span class=nx>N</span><span class=o>/</span><span class=mi>2</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>commitIndex</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>i</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=k>break</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span></code></pre></td></tr></table></div></div><h3 id=appliedat>AppliedAt</h3><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt>1
+</span><span class=lnt>2
+</span><span class=lnt>3
+</span><span class=lnt>4
+</span><span class=lnt>5
+</span><span class=lnt>6
+</span><span class=lnt>7
+</span><span class=lnt>8
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=kd>func</span><span class=w> </span><span class=p>(</span><span class=nx>rf</span><span class=w> </span><span class=o>*</span><span class=nx>Raft</span><span class=p>)</span><span class=w> </span><span class=nf>applyStateMachine</span><span class=p>()</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>for</span><span class=w> </span><span class=nx>raft_is_not_killed</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>for</span><span class=w> </span><span class=nx>appliedAt</span><span class=w> </span><span class=p>&lt;</span><span class=w> </span><span class=nx>commitIndex</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>apply_to_state_machine</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>time</span><span class=p>.</span><span class=nf>Sleep</span><span class=p>(</span><span class=mi>10</span><span class=w> </span><span class=nx>ms</span><span class=p>)</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span></code></pre></td></tr></table></div></div><h3 id=consistency-check>Consistency Check</h3><ol><li>AppendEntries RPCs will include the index and term of immediate preceding entry in leader&rsquo;s log. If followers&rsquo; log doesn&rsquo;t match (either doesn&rsquo;t have the index or term mismatch), the follower will refuse the entry and the leader will decrements to a previous entry and keeps trying until matches.</li><li>Optimization: Above mentioned consistency check protocol backs off per entry. To reduce the number of RPCs, the protocol can be optimized to be per term by having follower sends more information. Concretely, upon a mis-matching detected</li></ol><ul><li>Follower sends back<ul><li><code>conflictTerm</code>, the term of mismatch index</li><li><code>ConflictIndex</code>, the 1st index of the conflict term</li></ul></li><li>Leader scan for its log<ul><li>If the log has <code>conflictTerm</code>, update <code>nextIndex</code> to the last index of <code>conflictTerm</code></li><li>If the log doesn&rsquo;t have the term, update <code>nextIndex</code> to <code>conflictIndex</code></li></ul></li></ul><p>Leader and Follower may need special handling when follower&rsquo;s log doesn&rsquo;t have the index of leader&rsquo;s log at all. My implementation sets conflict term to -1 and conflict index to len(log). On the leader side, set <code>nextIndex</code> to the <code>conflictIndex</code></p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span><span class=lnt>36
+</span><span class=lnt>37
+</span><span class=lnt>38
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// consistency check per entry</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=k>for</span><span class=w> </span><span class=nx>follower</span><span class=w> </span><span class=nx>in</span><span class=w> </span><span class=nx>followers</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=cm>/** AppendEntries RPC Section **/</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>for</span><span class=w> </span><span class=nx>state</span><span class=w> </span><span class=o>==</span><span class=w> </span><span class=nx>leader</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>request</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nf>AppendEntriesRequest</span><span class=p>(</span><span class=nx>term</span><span class=p>,</span><span class=w> </span><span class=nx>logs</span><span class=p>[</span><span class=nx>nextIndex</span><span class=p>,</span><span class=w> </span><span class=nb>len</span><span class=p>(</span><span class=nx>logs</span><span class=p>)</span><span class=w> </span><span class=o>-</span><span class=w> </span><span class=mi>1</span><span class=p>],</span><span class=w> </span><span class=nx>prevLogIndex</span><span class=p>,</span><span class=w> </span><span class=nx>prevLogTerm</span><span class=p>)</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=cm>/** Consistency Check Section **/</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>if</span><span class=w> </span><span class=nx>conflictTerm</span><span class=w> </span><span class=o>==</span><span class=w> </span><span class=o>-</span><span class=mi>1</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>nextIndex</span><span class=p>[</span><span class=nx>follower</span><span class=p>]</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>conflictIndex</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>if</span><span class=w> </span><span class=nx>found_conflict</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=k>for</span><span class=w> </span><span class=nx>log</span><span class=w> </span><span class=nx>in</span><span class=w> </span><span class=nx>logs</span><span class=w> </span><span class=nx>reverse</span><span class=w> </span><span class=nx>order</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=k>if</span><span class=w> </span><span class=nx>conflictTerm</span><span class=w> </span><span class=nx>exist</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                    </span><span class=nx>nextIndex</span><span class=p>[</span><span class=nx>follower</span><span class=p>]</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>last_index_of_conflict_term</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=p>}</span><span class=w> </span><span class=k>else</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                    </span><span class=nx>nextIndex</span><span class=p>[</span><span class=nx>follower</span><span class=p>]</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>conflictIndex</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>                </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=c1>// follower optimization</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=kd>func</span><span class=w> </span><span class=p>(</span><span class=nx>rf</span><span class=w> </span><span class=o>*</span><span class=nx>Raft</span><span class=p>)</span><span class=w> </span><span class=nf>AppendEntries</span><span class=p>(</span><span class=nx>args</span><span class=w> </span><span class=o>*</span><span class=nx>AppendEntriesArgs</span><span class=p>,</span><span class=w> </span><span class=nx>reply</span><span class=w> </span><span class=o>*</span><span class=nx>AppendEntriesReply</span><span class=p>)</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>if</span><span class=w> </span><span class=nx>prevLogIndex</span><span class=w> </span><span class=o>&gt;=</span><span class=w> </span><span class=nb>len</span><span class=p>(</span><span class=nx>log</span><span class=p>)</span><span class=w> </span><span class=o>||</span><span class=w> </span><span class=nx>log</span><span class=p>[</span><span class=nx>prevLogIndex</span><span class=p>].</span><span class=nx>Term</span><span class=w> </span><span class=o>!=</span><span class=w> </span><span class=nx>args</span><span class=p>.</span><span class=nx>PrevLogTerm</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>if</span><span class=w> </span><span class=nx>prevLogIndex</span><span class=w> </span><span class=o>&gt;=</span><span class=w> </span><span class=nb>len</span><span class=p>(</span><span class=nx>rf</span><span class=p>.</span><span class=nx>log</span><span class=p>)</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>reply</span><span class=p>.</span><span class=nx>ConflictIndex</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nb>len</span><span class=p>(</span><span class=nx>rf</span><span class=p>.</span><span class=nx>log</span><span class=p>)</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>reply</span><span class=p>.</span><span class=nx>ConflictTerm</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=o>-</span><span class=mi>1</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w> </span><span class=k>else</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>reply</span><span class=p>.</span><span class=nx>ConflictTerm</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>log</span><span class=p>[</span><span class=nx>prevLogIndex</span><span class=p>].</span><span class=nx>Term</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>reply</span><span class=p>.</span><span class=nx>ConflictIndex</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>first_index_of_the_term</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>Term</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>currentTerm</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>Succeeded</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=kc>false</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span></code></pre></td></tr></table></div></div><h3 id=safety-1>Safety</h3><p>Straight-forward implementation</p><div class=highlight><div class=chroma><table class=lntable><tr><td class=lntd><pre tabindex=0 class=chroma><code><span class=lnt> 1
+</span><span class=lnt> 2
+</span><span class=lnt> 3
+</span><span class=lnt> 4
+</span><span class=lnt> 5
+</span><span class=lnt> 6
+</span><span class=lnt> 7
+</span><span class=lnt> 8
+</span><span class=lnt> 9
+</span><span class=lnt>10
+</span><span class=lnt>11
+</span><span class=lnt>12
+</span><span class=lnt>13
+</span><span class=lnt>14
+</span><span class=lnt>15
+</span><span class=lnt>16
+</span><span class=lnt>17
+</span><span class=lnt>18
+</span><span class=lnt>19
+</span><span class=lnt>20
+</span><span class=lnt>21
+</span><span class=lnt>22
+</span><span class=lnt>23
+</span><span class=lnt>24
+</span><span class=lnt>25
+</span><span class=lnt>26
+</span><span class=lnt>27
+</span><span class=lnt>28
+</span><span class=lnt>29
+</span><span class=lnt>30
+</span><span class=lnt>31
+</span><span class=lnt>32
+</span><span class=lnt>33
+</span><span class=lnt>34
+</span><span class=lnt>35
+</span><span class=lnt>36
+</span><span class=lnt>37
+</span><span class=lnt>38
+</span><span class=lnt>39
+</span><span class=lnt>40
+</span><span class=lnt>41
+</span><span class=lnt>42
+</span><span class=lnt>43
+</span><span class=lnt>44
+</span><span class=lnt>45
+</span><span class=lnt>46
+</span><span class=lnt>47
+</span></code></pre></td><td class=lntd><pre tabindex=0 class=chroma><code class=language-go data-lang=go><span class=line><span class=cl><span class=c1>// 1. Election Restriction</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=kd>func</span><span class=w> </span><span class=p>(</span><span class=nx>rf</span><span class=w> </span><span class=o>*</span><span class=nx>Raft</span><span class=p>)</span><span class=w> </span><span class=nf>isCandidateUpToDate</span><span class=p>(</span><span class=nx>RequestVoteRequest</span><span class=w> </span><span class=nx>args</span><span class=p>)</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>if</span><span class=w> </span><span class=nx>args</span><span class=p>.</span><span class=nx>lastLogTerm</span><span class=w> </span><span class=p>&lt;</span><span class=w> </span><span class=nx>logs</span><span class=p>[</span><span class=o>-</span><span class=mi>1</span><span class=p>].</span><span class=nx>Term</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>voteGranted</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=kc>false</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>if</span><span class=w> </span><span class=nx>args</span><span class=p>.</span><span class=nx>lastLogTerm</span><span class=w> </span><span class=p>&gt;</span><span class=w> </span><span class=nx>logs</span><span class=p>[</span><span class=o>-</span><span class=mi>1</span><span class=p>].</span><span class=nx>Term</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>voteGranted</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=kc>false</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>if</span><span class=w> </span><span class=nx>args</span><span class=p>.</span><span class=nx>lastLogTerm</span><span class=w> </span><span class=o>==</span><span class=w> </span><span class=nx>logs</span><span class=p>[</span><span class=o>-</span><span class=mi>1</span><span class=p>].</span><span class=nx>Index</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reply</span><span class=p>.</span><span class=nx>voteGranted</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>args</span><span class=p>.</span><span class=nx>lastLogIndex</span><span class=w> </span><span class=o>&gt;=</span><span class=w> </span><span class=nb>len</span><span class=p>(</span><span class=nx>logs</span><span class=p>)</span><span class=w> </span><span class=o>-</span><span class=w> </span><span class=mi>1</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=kd>func</span><span class=w> </span><span class=p>(</span><span class=nx>rf</span><span class=w> </span><span class=o>*</span><span class=nx>Raft</span><span class=p>)</span><span class=w> </span><span class=nf>RequestVote</span><span class=p>(</span><span class=nx>args</span><span class=w> </span><span class=o>*</span><span class=nx>RequestVoteArgs</span><span class=p>,</span><span class=w> </span><span class=nx>reply</span><span class=w> </span><span class=o>*</span><span class=nx>RequestVoteReply</span><span class=p>)</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=cm>/** Additional Safety constrains to determine whether a candidate can be elected **/</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>if</span><span class=w> </span><span class=p>!</span><span class=nf>isCandidateUpToDate</span><span class=p>(</span><span class=nx>args</span><span class=p>)</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=nx>reject_vote</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>return</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=c1>// 2. Only commit entries in current term</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=kd>func</span><span class=w> </span><span class=p>(</span><span class=nx>rf</span><span class=w> </span><span class=o>*</span><span class=nx>Raft</span><span class=p>)</span><span class=w> </span><span class=nf>sendAppendEntries</span><span class=p>()</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=cm>/** Update matchIndex Section **/</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=k>for</span><span class=w> </span><span class=nx>i</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=p>[</span><span class=nx>leaderLastIndex</span><span class=p>,</span><span class=w> </span><span class=mi>0</span><span class=p>]</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=k>if</span><span class=w> </span><span class=nx>cnt</span><span class=w> </span><span class=p>&gt;</span><span class=w> </span><span class=nx>N</span><span class=o>/</span><span class=mi>2</span><span class=w> </span><span class=o>&amp;&amp;</span><span class=w> </span><span class=nx>logs</span><span class=p>[</span><span class=nx>i</span><span class=p>].</span><span class=nx>term</span><span class=w> </span><span class=o>==</span><span class=w> </span><span class=nx>currentTerm</span><span class=w> </span><span class=p>{</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=nx>commitIndex</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>i</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>            </span><span class=k>break</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>        </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>    </span><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=p>}</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=w>
+</span></span></span><span class=line><span class=cl><span class=c1>// 3. Safety Optimization.Append a noop at current term as soon as the leader is elected</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=o>...</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=nx>state</span><span class=w> </span><span class=p>=</span><span class=w> </span><span class=nx>leader</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=nx>logs</span><span class=p>.</span><span class=nb>append</span><span class=p>(</span><span class=nf>Entry</span><span class=p>(</span><span class=nx>currentTerm</span><span class=p>,</span><span class=w> </span><span class=err>&#39;</span><span class=nx>noop</span><span class=err>&#39;</span><span class=p>))</span><span class=w>
+</span></span></span><span class=line><span class=cl><span class=o>...</span><span class=w>
+</span></span></span></code></pre></td></tr></table></div></div><h2 id=ref>Ref</h2><ul><li><a class=link href=https://thesquareplanet.com/blog/students-guide-to-raft/ target=_blank rel=noopener>Student Guide</a></li></ul></section><footer class=article-footer><section class=article-copyright><svg class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><circle cx="12" cy="12" r="9"/><path d="M14.5 9a3.5 4 0 100 6"/></svg>
+<span>Licensed under CC BY-NC-SA 4.0</span></section></footer></article><aside class=related-content--wrapper><h2 class=section-title>Related content</h2><div class=related-content><div class="flex article-list--tile"><article><a href=/blogs/p/raft-leader-election/><div class=article-details><h2 class=article-title>Raft Leader Election</h2></div></a></article></div></div></aside><div class=disqus-container><div id=disqus_thread></div><script>window.disqus_config=function(){},function(){if(["localhost","127.0.0.1"].indexOf(window.location.hostname)!=-1){document.getElementById("disqus_thread").innerHTML="Disqus comments not available by default when the website is previewed locally.";return}var t=document,e=t.createElement("script");e.async=!0,e.src="//hugo-theme-stack.disqus.com/embed.js",e.setAttribute("data-timestamp",+new Date),(t.head||t.body).appendChild(e)}()</script><noscript>Please enable JavaScript to view the <a href=https://disqus.com/?ref_noscript>comments powered by Disqus.</a></noscript><a href=https://disqus.com class=dsq-brlink>comments powered by <span class=logo-disqus>Disqus</span></a></div><style>.disqus-container{background-color:var(--card-background);border-radius:var(--card-border-radius);box-shadow:var(--shadow-l1);padding:var(--card-padding)}</style><script>window.addEventListener("onColorSchemeChange",e=>{typeof DISQUS=="object"&&DISQUS.reset({reload:!0})})</script><footer class=site-footer><section class=copyright>&copy;
+2025 GouGe</section><section class=powerby>Built with <a href=https://gohugo.io/ target=_blank rel=noopener>Hugo</a><br>Theme <b><a href=https://github.com/CaiJimmy/hugo-theme-stack target=_blank rel=noopener data-version=3.33.0>Stack</a></b> designed by <a href=https://jimmycai.com target=_blank rel=noopener>Jimmy</a></section></footer><div class=pswp tabindex=-1 role=dialog aria-hidden=true><div class=pswp__bg></div><div class=pswp__scroll-wrap><div class=pswp__container><div class=pswp__item></div><div class=pswp__item></div><div class=pswp__item></div></div><div class="pswp__ui pswp__ui--hidden"><div class=pswp__top-bar><div class=pswp__counter></div><button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+<button class="pswp__button pswp__button--share" title=Share></button>
+<button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+<button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button><div class=pswp__preloader><div class=pswp__preloader__icn><div class=pswp__preloader__cut><div class=pswp__preloader__donut></div></div></div></div></div><div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap"><div class=pswp__share-tooltip></div></div><button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+</button>
+<button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)"></button><div class=pswp__caption><div class=pswp__caption__center></div></div></div></div></div><script src=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo=" crossorigin=anonymous defer></script><script src=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU=" crossorigin=anonymous defer></script><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css crossorigin=anonymous><link rel=stylesheet href=https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css crossorigin=anonymous></main></div><script src=https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z+KMkF24hUW8WePSA9HM=" crossorigin=anonymous></script><script type=text/javascript src=/blogs/ts/main.c922af694cc257bf1ecc41c0dd7b0430f9114ec280ccf67cd2c6ad55f5316c4e.js defer></script><script>(function(){const e=document.createElement("link");e.href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap",e.type="text/css",e.rel="stylesheet",document.head.appendChild(e)})()</script></body></html>
