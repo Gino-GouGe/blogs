@@ -6,7 +6,7 @@ categories:
     - Raft
 ---
 
-Following the previous blog [Leader Election](/p/raft-leader-election/), Log Replication is covered today. Once a leader has been elected, it begins servicing client requests. Each request contains a command to be executed by the replicated state machine.
+Following the previous blog [Leader Election]({{< relref "/post/raft-leader-election" >}}), Log Replication is covered today. Once a leader has been elected, it begins servicing client requests. Each request contains a command to be executed by the replicated state machine.
 
 ## Log Replication
 

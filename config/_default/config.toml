@@ -16,3 +16,6 @@ disqusShortname = "hugo-theme-stack"
 
 [pagination]
 pagerSize = 5
+
+relativeURLs = true
+canonifyURLs = false
